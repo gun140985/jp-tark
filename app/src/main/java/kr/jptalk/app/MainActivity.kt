@@ -6,7 +6,12 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.ui.layout.ContentScale
+import androidx.core.content.FileProvider
+import java.io.File
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -104,12 +109,23 @@ fun App(s: AppState) {
         else { pending = m; permLauncher.launch(Manifest.permission.RECORD_AUDIO) }
     }
 
+    var showPhotoChoice by remember { mutableStateOf(false) }
+    val shotFile = remember { File(ctx.cacheDir, "photos/shot.jpg").also { it.parentFile?.mkdirs() } }
+    val shotUri = remember { FileProvider.getUriForFile(ctx, ctx.packageName + ".files", shotFile) }
+    val takePic = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        if (ok) s.openPhoto(shotUri, shotFile) else shotFile.delete()
+    }
+    val pickPic = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) s.openPhoto(uri)
+    }
+
     val snack = remember { SnackbarHostState() }
     LaunchedEffect(s.toast) {
         s.toast?.let { snack.showSnackbar(it); s.toast = null }
     }
 
-    Scaffold(
+    val photoSess = s.photo
+    if (photoSess != null) PhotoScreen(s, photoSess) else Scaffold(
         containerColor = colors.background,
         snackbarHost = { SnackbarHost(snack) }
     ) { pad ->
@@ -121,7 +137,7 @@ fun App(s: AppState) {
             ) {
                 Text("한일 통역", fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                 TextButton(onClick = { showInput = true }) { Text("입력", fontSize = 14.sp) }
-                TextButton(onClick = { showHelp = true }) { Text("사용법", fontSize = 14.sp) }
+                TextButton(onClick = { showPhotoChoice = true }) { Text("사진", fontSize = 14.sp) }
                 TextButton(onClick = { s.newConversation() }) { Text("새 대화", fontSize = 14.sp) }
                 IconButton(onClick = { showSettings = true }) { Icon(Icons.Filled.Settings, contentDescription = "설정") }
             }
@@ -212,8 +228,19 @@ fun App(s: AppState) {
         }
     }
 
+    if (showPhotoChoice) PhotoChoiceDialog(
+        onCamera = {
+            showPhotoChoice = false
+            try { takePic.launch(shotUri) } catch (e: Exception) { s.toast = "카메라 앱을 열 수 없습니다. 갤러리에서 골라 주세요." }
+        },
+        onGallery = {
+            showPhotoChoice = false
+            pickPic.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+        },
+        onClose = { showPhotoChoice = false }
+    )
     if (showHelp) HelpDialog { showHelp = false; s.firstRun = false }
-    if (showSettings) SettingsDialog(s) { showSettings = false }
+    if (showSettings) SettingsDialog(s, onHelp = { showSettings = false; showHelp = true }) { showSettings = false }
     if (showInput) InputDialog(s) { showInput = false }
     if (showAdd) AddDialog(s, onListen = { listen(Mode.ADD) }) {
         if (s.listening == Mode.ADD) s.cancelListening()
@@ -258,6 +285,7 @@ fun ListenPanel(mode: Mode, s: AppState) {
 @Composable
 fun Bubble(m: Msg, s: AppState) {
     val c = MaterialTheme.colorScheme
+    if (m.side == Side.PHOTO) { PhotoBubble(m, s); return }
     val mine = m.side == Side.ME
     Box(Modifier.fillMaxWidth(), contentAlignment = if (mine) Alignment.CenterEnd else Alignment.CenterStart) {
         Surface(
@@ -290,6 +318,25 @@ fun Bubble(m: Msg, s: AppState) {
                         OutlinedButton(onClick = { s.speakJa(m.ja) }, modifier = Modifier.padding(top = 4.dp)) { Text("일본어로 읽기") }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun PhotoBubble(m: Msg, s: AppState) {
+    val c = MaterialTheme.colorScheme
+    Surface(shape = R14, color = c.surface, border = BorderStroke(1.dp, c.outline), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("사진 번역", fontSize = 13.sp, color = c.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
+            m.thumb?.let {
+                Image(it, contentDescription = "번역한 사진", contentScale = ContentScale.Fit,
+                    modifier = Modifier.heightIn(max = 140.dp).fillMaxWidth())
+            }
+            Text(m.ko, fontSize = 17.sp, lineHeight = 26.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { s.speakKo(m.ko) }) { Text("한국어로 듣기") }
+                OutlinedButton(onClick = { s.speakJa(m.ja) }) { Text("일본어로 읽기") }
             }
         }
     }
@@ -343,6 +390,8 @@ fun HelpDialog(onClose: () -> Unit) {
                 Text("3. 에어팟·이어폰은 '듣는 용'으로 쓰세요. 상대 목소리는 휴대폰 본체 마이크가 더 정확합니다 (설정에서 바꿀 수 있음).")
                 Text("4. 처음 한 번은 번역 데이터를 내려받느라 인터넷이 필요합니다. 그다음부터 번역은 인터넷 없이도 됩니다. 음성인식은 인터넷이 필요합니다.")
                 Text("5. 자주 쓰는 말은 누르면 바로 나오고, '+ 추가'로 내 문장을 저장할 수 있습니다.")
+                Text("6. 사진: 위의 '사진'을 눌러 일본어 메뉴판·안내문을 찍으면 번역과 한글 발음이 나옵니다. 긴 글은 문단째 자연스럽게 번역하고, '원문·발음 보기'로 문장별 원문을 볼 수 있습니다.")
+                Text("7. 사용법은 설정(톱니바퀴) 안에서 다시 볼 수 있습니다.")
             }
         }
     )
@@ -403,7 +452,7 @@ fun AddDialog(s: AppState, onListen: () -> Unit, onClose: () -> Unit) {
 }
 
 @Composable
-fun SettingsDialog(s: AppState, onClose: () -> Unit) {
+fun SettingsDialog(s: AppState, onHelp: () -> Unit, onClose: () -> Unit) {
     val st = s.settings
     val outLabels = listOf(
         Out.EARPHONE to "이어폰 (없으면 스피커)",
@@ -416,6 +465,7 @@ fun SettingsDialog(s: AppState, onClose: () -> Unit) {
         title = { Text("마이크·스피커 설정") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                OutlinedButton(onClick = onHelp, modifier = Modifier.fillMaxWidth()) { Text("사용법 보기") }
                 Section("마이크")
                 RadioRow("휴대폰 본체 마이크 (추천)", !st.btMic) { s.updateSettings(st.copy(btMic = false)) }
                 RadioRow("이어폰·블루투스 마이크", st.btMic) { s.updateSettings(st.copy(btMic = true)) }

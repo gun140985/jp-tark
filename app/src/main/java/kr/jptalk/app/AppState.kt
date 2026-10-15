@@ -1,6 +1,8 @@
 package kr.jptalk.app
 
 import android.content.Context
+import android.net.Uri
+import androidx.compose.ui.graphics.asImageBitmap
 import android.content.SharedPreferences
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -15,7 +17,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
 
-enum class Side { THEM, ME }
+enum class Side { THEM, ME, PHOTO }
 enum class MsgState { PENDING, DONE, ERROR }
 enum class Mode { THEM, ME, ADD }
 
@@ -27,7 +29,8 @@ data class Msg(
     val ko: String = "",
     val pron: String = "",
     val state: MsgState = MsgState.PENDING,
-    val error: String = ""
+    val error: String = "",
+    val thumb: androidx.compose.ui.graphics.ImageBitmap? = null
 )
 
 data class Phrase(val label: String, val ko: String, val ja: String, val custom: Boolean = false)
@@ -280,6 +283,89 @@ class AppState(private val ctx: Context, private val scope: CoroutineScope) {
                 custom.add(Phrase(o.getString("label"), o.getString("ko"), o.getString("ja"), true))
             }
         }
+    }
+
+    // ---------- 사진 번역 ----------
+    var photo by mutableStateOf<PhotoSession?>(null)
+        private set
+    private var photoBitmap: android.graphics.Bitmap? = null
+
+    fun openPhoto(uri: Uri, deleteAfter: java.io.File? = null) {
+        cancelListening()
+        voice.stop()
+        scope.launch {
+            val bmp = try {
+                withContext(Dispatchers.IO) { PhotoText.loadBitmap(ctx, uri) }
+            } catch (e: Exception) {
+                toast = "사진을 열지 못했습니다. 다른 사진으로 다시 시도해 주세요."
+                return@launch
+            } finally {
+                deleteAfter?.delete()   // 찍은 사진은 저장하지 않음
+            }
+            photoBitmap = bmp
+            val session = PhotoSession(bmp.asImageBitmap())
+            photo = session
+            try {
+                val found = PhotoText.recognize(bmp)
+                if (found.isEmpty()) {
+                    session.error = "글자를 읽지 못했습니다. 밝은 곳에서 글자가 화면에 꽉 차게 다시 찍어 주세요."
+                } else {
+                    found.forEachIndexed { i, (rect, lines) ->
+                        val b = withContext(Dispatchers.Default) { PhotoText.analyze(i + 1, rect, lines.joinToString("\n"), tr) }
+                        session.blocks.add(b)
+                    }
+                }
+            } catch (e: Exception) {
+                session.error = tr.error ?: "글자를 읽는 중 문제가 생겼습니다. 다시 찍어 주세요."
+            } finally {
+                session.processing = false
+            }
+        }
+    }
+
+    fun closePhoto() {
+        voice.stop()
+        photo = null
+        photoBitmap = null
+    }
+
+    private fun updateBlock(no: Int, f: (PBlock) -> PBlock) {
+        val sess = photo ?: return
+        val i = sess.blocks.indexOfFirst { it.no == no }
+        if (i >= 0) sess.blocks[i] = f(sess.blocks[i])
+    }
+
+    fun toggleKind(b: PBlock) = updateBlock(b.no) {
+        it.copy(kind = if (it.kind == BlockKind.LIST) BlockKind.PROSE else BlockKind.LIST)
+    }
+
+    fun toggleExpand(b: PBlock) = updateBlock(b.no) { it.copy(expanded = !it.expanded) }
+
+    fun editBlock(b: PBlock, newText: String) {
+        val t = newText.trim()
+        if (t.isEmpty()) return
+        scope.launch {
+            try {
+                val nb = withContext(Dispatchers.Default) { PhotoText.analyze(b.no, b.rect, t, tr, b.kind) }
+                updateBlock(b.no) { nb }
+            } catch (e: Exception) {
+                toast = "다시 번역하지 못했습니다."
+            }
+        }
+    }
+
+    fun blockKo(b: PBlock) = if (b.kind == BlockKind.PROSE) b.proseKo else b.rows.joinToString("\n") { it.ko }
+    fun blockJa(b: PBlock) = if (b.kind == BlockKind.PROSE) PhotoText.joinLines(b.text) else b.text
+
+    fun photoToChat() {
+        val sess = photo ?: return
+        if (sess.blocks.isEmpty()) return
+        val ko = sess.blocks.joinToString("\n\n") { blockKo(it) }
+        val ja = sess.blocks.joinToString("\n") { blockJa(it) }
+        val thumb = photoBitmap?.let { PhotoText.thumbnail(it) }
+        upsert(Msg(nextId++, Side.PHOTO, "사진", ja = ja, ko = ko, state = MsgState.DONE, thumb = thumb))
+        closePhoto()
+        toast = "사진 번역을 대화에 넣었습니다"
     }
 
     fun shutdown() {

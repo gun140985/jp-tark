@@ -12,8 +12,8 @@ android {
         applicationId = "kr.jptalk.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
     }
 
     // 항상 같은 서명 키를 써야 새 버전을 덮어 설치할 수 있다
@@ -61,6 +61,9 @@ dependencies {
 
     // 무료 온디바이스 번역 (구글 ML Kit)
     implementation("com.google.mlkit:translate:17.0.3")
+    // 사진 속 일본어 글자 읽기 (무료, 폰 안에서 처리)
+    implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
     // 일본어 한자 읽기 (형태소 분석기)
     implementation("com.atilika.kuromoji:kuromoji-ipadic:0.9.0")
 
