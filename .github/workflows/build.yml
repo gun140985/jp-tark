@@ -28,7 +28,7 @@ jobs:
           set -o pipefail
           if ! gradle assembleDebug --no-daemon 2>&1 | tee build.log; then
             # 오류 줄만 골라 요약(annotation)으로 남김
-            grep -E "^e: |error:|What went wrong|Could not|> " build.log | head -40 > errs.txt || true
+            { grep -E "^e: " build.log | head -15; grep -A 25 "What went wrong" build.log | head -30; } > errs.txt || true
             msg=$(sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g' errs.txt)
             echo "::error title=build::${msg}"
             exit 1
